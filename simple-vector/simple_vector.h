@@ -34,10 +34,7 @@ public:
 
     // Создаёт вектор из size элементов, инициализированных значением по умолчанию
     explicit SimpleVector(size_t size)
-    : size_(size), capacity_(size), data_(size) {
-        for(auto it = this->begin(); it != this->end(); ++it){
-            *it = std::move(Type{});
-        }
+    : SimpleVector(size, Type{}) {
     }
 
     SimpleVector(ReserveProxyObj reserve_proxy)
@@ -46,7 +43,7 @@ public:
     
 
     // Создаёт вектор из size элементов, инициализированных значением value
-    SimpleVector(size_t size, const Type& value)
+    SimpleVector(size_t size, Type value)
     : size_(size), capacity_(size), data_(size) {
         for(auto it = this->begin(); it != this->end(); ++it){
             *it = std::move(value);
@@ -61,14 +58,11 @@ public:
                   data_.Get());
     }
 
-    SimpleVector(const SimpleVector& other) {
-        assert(size_ == 0 && data_.Get() == nullptr);
-        SimpleVector tmp(other.size_);
-        tmp.capacity_ = other.capacity_;
+    SimpleVector(const SimpleVector& other)
+    : size_(other.size_), capacity_(other.capacity_), data_(other.capacity_) {
         std::copy(std::make_move_iterator(other.begin()),
-                  std::make_move_iterator(other.end()),
-                  tmp.begin());
-        swap(tmp);
+                  std::make_move_iterator(other.end()), 
+                  data_.Get());
     }
 
     // Конструктор перемещения
@@ -81,14 +75,12 @@ public:
     // Оператор присваивания перемещением
     SimpleVector& operator=(SimpleVector&& rhs) noexcept {
         if (this != &rhs) {
-            // Освобождаем старые ресурсы
-            Clear();
-            // Перемещаем данные
-            size_ = rhs.size_;
-            capacity_ = rhs.capacity_;
-            data_ = std::move(rhs.data_);
-            rhs.size_ = 0;
-            rhs.capacity_ = 0;
+            if (rhs.IsEmpty()) {
+                Clear();
+                return *this;
+            }
+            SimpleVector tmp(std::move(rhs));
+            swap(tmp);
         }
         return *this;
     }
@@ -183,7 +175,7 @@ public:
         // либо создаём новый массив и производим копирование элементов
         size_t capacity = std::max(new_size, capacity_ * 2);
         ArrayPtr<Type> new_arr(capacity); 
-        //std::fill((new_arr.Get() + size_), (new_arr.Get() + new_size), Type());
+        
         for(auto it = (new_arr.Get() + size_); it != (new_arr.Get() + new_size); ++it){
             *it = std::move(Type{});
         }
@@ -214,20 +206,10 @@ public:
             return;
         }
         // Если контейнер заполнен полностью
-        // Создаём контейнер вместимостью в два раза больше
-        // Копируем элементы исходного контейнера в новый
-        // Добавляем новый элемент
-        ArrayPtr<Type> new_arr(capacity_ * 2);
-        std::copy(std::make_move_iterator(this->begin()),
-                 std::make_move_iterator(this->begin() + size_),
-                 new_arr.Get());
-        new_arr[size_] = std::move(item);
-
-        // Обновляем размер и вместимость
-        // Переключаемся на новый массив
+        Reserve(capacity_ == 0 ? 1 : capacity_ * 2);
+        // Добавляем элемент
+        data_[size_] = std::move(item);
         ++size_;
-        capacity_ = capacity_ * 2;
-        data_.swap(new_arr);
     }
 
     // Вставляет значение value в позицию pos.
@@ -241,11 +223,11 @@ public:
             if (index != 0) {
                 return this->end();
             }
-            capacity_ = 1;
-            ArrayPtr<Type> new_arr(capacity_);
-            new_arr[index] = std::move(value);
+            // Резервируем место для одного элемента
+            Reserve(1);
+            // Вставляем элемент
+            data_[index] = std::move(value); 
             ++size_;
-            data_.swap(new_arr);
             return &data_[index];
         }
         // Если контейнер полностью не заполнен
@@ -257,23 +239,16 @@ public:
             ++size_;
             return &data_[index];
         }
-        // Если контейнер заполнен полностью
-        // Создаём копию вектора и модифицируем её
-        // Копируем элементы до pos
-        // Добавляем сам вставляемый элемент
-        // Копируем элементы от pos до конца исходного массива в копию
-        SimpleVector<Type> new_vector(capacity_ * 2);
-        std::copy(std::make_move_iterator(this->begin()),
-                  std::make_move_iterator(this->begin() + index),
-                  new_vector.begin());
-        new_vector[index] = std::move(value);
-        std::copy(std::make_move_iterator(this->begin() + index),
-                  std::make_move_iterator(this->end()),
-                  new_vector.begin() + index + 1);
-        // Обновляем размер и вместисмость копии контейнера
-        new_vector.size_ = size_ + 1;
-        // Производим обмен содержимым оригинала и копии
-        swap(new_vector);
+        // Если вектор полностью заполнился
+        Reserve(capacity_ * 2); // Резервируем в два раза больше места
+
+        // Сдвигаем элементы после индекса вправо
+        std::copy_backward(std::make_move_iterator(this->begin() + index),
+                           std::make_move_iterator(this->end()),
+                           this->end() + 1);
+        data_[index] = std::move(value); // Вставляем новый элемент
+        // Увеличиваем размер
+        ++size_;
         return &data_[index];
     }
 
@@ -296,15 +271,8 @@ public:
 
     // Обменивает значение с другим вектором
     void swap(SimpleVector& other) noexcept {
-        size_t tmp_size = size_;
-        size_t tmp_capacity = capacity_;
-
-        size_ = other.size_;
-        capacity_ = other.capacity_;
-
-        other.size_ = tmp_size;
-        other.capacity_ = tmp_capacity;
-
+        std::swap(size_, other.size_);
+        std::swap(capacity_, other.capacity_);
         data_.swap(other.data_);
     }
 
